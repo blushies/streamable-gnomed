@@ -1,6 +1,6 @@
 # Streamable Gnomed
 
-This server acts as a proxy to streamable, intercepts and modifies requested .mp4 files, and gnomifies them.
+This server acts as a proxy to streamable, and adds gnomes to the html.
 
 ### Dependencies
 
