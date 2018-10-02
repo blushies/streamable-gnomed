@@ -1,16 +1,26 @@
 import fs from 'fs';
+import path from 'path';
 import express from 'express';
 import fetch from 'node-fetch';
+import cheerio from 'cheerio';
 
 import config from './config';
 import debug from './debug';
-import { fileExists } from './helpers/fs';
+import cache from './cache';
 import makeAsyncMiddleware from './makeAsyncMiddleware';
-import gnomeTransform from './gnomeTransform';
 
 
 const app = express();
 const STREAMABLE_URL = 'https://streamable.com';
+const GNOMIFY_SCRIPT = fs.readFileSync(path.resolve(__dirname, '../gnomify.html'), {
+  encoding: 'utf8',
+});
+
+const injectScript = (html: string): Buffer => {
+  const $ = cheerio.load(html);
+  $('#video-player-tag').after(GNOMIFY_SCRIPT);
+  return Buffer.from($.html());
+};
 
 app.set('x-powered-by', false);
 
@@ -19,48 +29,46 @@ app.all([
   '/',
   '/login',
   '/signup',
+  '/favicon.ico',
 ], (req, res) => {
-  debug('redirecting', req.url);
+  debug(req.url, 'redirecting');
   res.redirect(`${STREAMABLE_URL}${req.url}`);
 });
 
-// @ts-ignore
-app.get(/\/.+\.mp4/, makeAsyncMiddleware(async (req, res) => {
-  const filename = req.url;
-  const filepath = `${config.CACHE_DIR}${filename}`;
-  const exists = await fileExists(filepath);
-  if (!exists) {
-    debug(`couldn't find gnomed file "${filename}"`);
-    // TODO - this will just make the page fail, do something else
-    res.status(404);
-    res.end();
-  }
-  debug(`serving gnomed mp4: "${filename}"`);
-  const file = fs.createReadStream(filepath);
-  file.pipe(res);
-}));
+app.use(makeAsyncMiddleware(async (req, res) => {
+  debug(req.url, 'proxying');
+  debugger;
+  const filename = req.url.slice(1);
+  const file = await cache.get(filename);
 
-
-app.use(makeAsyncMiddleware(async (req, res, next) => {
-  debug('proxying', req.url);
-  const proxy_res = await fetch(`${STREAMABLE_URL}${req.url}`);
-  if (proxy_res.status !== 200) {
-    const text = await proxy_res.text();
-    next(text);
+  if (file) {
+    debug(req.url, 'serving from cache');
+    file.pipe(res);
+    return;
   }
-  proxy_res.body
-    .pipe(gnomeTransform)
-    .pipe(res)
-    ;
+
+  debug(req.url, 'not in cache, fetching');
+  const streamable_res = await fetch(`${STREAMABLE_URL}${req.url}`);
+
+  if (streamable_res.status !== 200) {
+    const text = await streamable_res.text();
+    throw text;
+  }
+
+  const html = await streamable_res.text();
+  const data = injectScript(html);
+
+  cache.set(filename, data);
+  debug(req.url, 'sending from source');
+
+  res.set('content-type', 'text/html; charset=utf-8');
+  res.send(data);
 }));
 
 // @ts-ignore
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  res
-    .status(500)
-    .send(typeof err === 'object' ? JSON.stringify(err) : err)
-    .end()
-    ;
+  debug(req.url, 'error', err);
+  res.redirect(`${STREAMABLE_URL}${req.url}`);
 });
 
 
