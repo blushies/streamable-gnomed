@@ -5,5 +5,4 @@ This server acts as a proxy to streamable, intercepts and modifies requested .mp
 ### Dependencies
 
 - node
-- ffmpeg
 
